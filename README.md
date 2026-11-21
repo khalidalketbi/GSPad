@@ -8,6 +8,17 @@
 
 [Download on the App Store](https://apps.apple.com/us/app/gspad/id6832260857) · [Support & setup](https://gspad-support.honedhumor2.chatgpt.site/) · [Privacy policy](https://gspad-support.honedhumor2.chatgpt.site/privacy)
 
+## Telemetry files and firmware updates
+
+The **RadioMaster Pocket ESP8285 TX Backpack** telemetry package is available here:
+
+- **[Download Telemetry v3 firmware](https://raw.githubusercontent.com/khalidalketbi/GSPad/main/firmware/backpack-1.5.7/Pocket-Backpack-1.5.7-NavPad-Telemetry-v3.bin.gz)** — Backpack 1.5.7 with the GSPad-compatible HTTP endpoints.
+- **[Download stock Backpack 1.5.7](https://raw.githubusercontent.com/khalidalketbi/GSPad/main/firmware/backpack-1.5.7/Pocket-Backpack-1.5.7-Stock.bin.gz)** — legacy upgrade and recovery file; stock firmware alone does not add the HTTP endpoints.
+- **[Read the update instructions first](updates/README.md)** — target checks, installation, recovery, and current verification limits.
+- **[Telemetry API](telemetry/README.md)** · **[Source, build instructions, and checksums](firmware/backpack-1.5.7/README.md)** · **[Change log](CHANGELOG.md)**.
+
+The original firmware filenames use **NavPad Telemetry**, the earlier project name. This is the HTTP telemetry package used by GSPad. These files update the **Backpack**, which has separate firmware from the radio's RF transmitter. Firmware updates are managed outside the App Store app.
+
 The aircraft is back on the ground. You remember the climb, the turn, and that stretch where it really picked up speed. Now comes the fun question: what did the flight actually look like?
 
 Meet **GSPad**, a flight telemetry viewer and recorder by **Khalid Alketbi**. It brings the aircraft's position and available flight data to your iPhone or iPad, lets you record the session, and helps you explore it afterward. Think of it as a flight notebook with a map and a replay button.
@@ -103,6 +114,6 @@ If you find GSPad useful, share this guide with another pilot or star this repos
 
 ---
 
-Created by **Khalid Alketbi**. This repository contains GSPad's public introduction and usage guide.
+Created by **Khalid Alketbi**. This repository contains GSPad's public introduction, usage guide, and Pocket Backpack telemetry package. The firmware directory includes its GPLv3 license and corresponding source.
 
 *App Store availability and device requirements checked on November 21, 2026. For current availability, see the App Store listing.*

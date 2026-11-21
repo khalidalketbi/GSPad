@@ -1,0 +1,211 @@
+diff --git a/lib/WIFI/devWIFI.cpp b/lib/WIFI/devWIFI.cpp
+index cbf8948..dc25a8c 100644
+--- a/lib/WIFI/devWIFI.cpp
++++ b/lib/WIFI/devWIFI.cpp
+@@ -120,6 +120,117 @@ bool gcsIPSet = false;
+ #endif
+ 
+ #if defined(TARGET_TX_BACKPACK)
++#if defined(NAVPAD_DIRECT_GPS) && defined(MAVLINK_ENABLED)
++static constexpr size_t navPadFrameLimit = 24;
++static constexpr unsigned long navPadFreshMS = 2500;
++static uint32_t navPadSequence = 0;
++static struct NavPadFrame
++{
++  unsigned long receivedAt;
++  uint32_t sequence;
++  uint8_t size;
++  uint8_t source;
++  uint8_t bytes[73]; // MSPv2 envelope + CRSF's maximum 64-byte frame.
++} navPadFrames[navPadFrameLimit];
++
++static void CaptureNavPadTelemetry(const uint8_t *data, uint16_t size)
++{
++  if (size < 13 || size > sizeof(navPadFrames[0].bytes) ||
++      data[0] != '$' || data[1] != 'X' || (data[2] != '<' && data[2] != '>') ||
++      data[4] != 0x11 || data[5] != 0 || data[6] != size - 9 ||
++      data[7] != 0 || data[9] != size - 11)
++  {
++    return;
++  }
++
++  const uint8_t type = data[10];
++  uint8_t source = 0;
++  switch (type)
++  {
++    case 0x08: // Battery, with optional sensor ID after the standard payload.
++      if (size < 21) return;
++      source = size > 21 ? data[19] : 0;
++      break;
++    case 0x0C: // RPM
++    case 0x0D: // Temperature
++    case 0x0E: // Voltage group
++      if (size < 14) return;
++      source = data[11];
++      break;
++    case 0x02: case 0x06: case 0x07: case 0x09: case 0x0A: case 0x11:
++    case 0x14: case 0x1C: case 0x1D: case 0x1E: case 0x21: case 0x23:
++      break;
++    default:
++      return;
++  }
++
++  const unsigned long now = millis();
++  NavPadFrame *slot = nullptr;
++  for (auto &frame : navPadFrames)
++  {
++    if (frame.size && frame.bytes[10] == type && frame.source == source)
++    {
++      slot = &frame;
++      break;
++    }
++    if (slot == nullptr && (!frame.size || now - frame.receivedAt > navPadFreshMS))
++    {
++      slot = &frame;
++    }
++  }
++  if (slot != nullptr)
++  {
++    memcpy(slot->bytes, data, size);
++    slot->source = source;
++    slot->size = size;
++    slot->receivedAt = now;
++    slot->sequence = ++navPadSequence;
++  }
++}
++
++static void HandleNavPadTelemetry(AsyncWebServerRequest *request)
++{
++  const bool gpsOnly = request->url() == "/navpad/gps";
++  const bool timed = request->url() == "/navpad/telemetry/v3";
++  AsyncWebServerResponse *response;
++  if (wifiMode != WIFI_AP || wifiService != WIFI_SERVICE_MAVLINK_TX)
++  {
++    response = request->beginResponse(503, "text/plain", "Enable WiFi telemetry on the Backpack access point");
++  }
++  else
++  {
++    static constexpr char hex[] = "0123456789abcdef";
++    String body;
++    const unsigned long now = millis();
++    for (auto &frame : navPadFrames)
++    {
++      const unsigned long age = now - frame.receivedAt;
++      if (frame.size && age > navPadFreshMS) frame.size = 0;
++      if (!frame.size || (gpsOnly && (frame.size != 28 || frame.bytes[10] != 0x02))) continue;
++
++      char encoded[sizeof(frame.bytes) * 2 + 1];
++      for (size_t i = 0; i < frame.size; ++i)
++      {
++        encoded[i * 2] = hex[frame.bytes[i] >> 4];
++        encoded[i * 2 + 1] = hex[frame.bytes[i] & 15];
++      }
++      encoded[frame.size * 2] = '\0';
++      char metadata[24] = {};
++      if (timed) snprintf(metadata, sizeof(metadata), ";%lu;%lu", age, static_cast<unsigned long>(frame.sequence));
++      if ((!body.isEmpty() && !body.concat('\n')) || !body.concat(encoded) || (timed && !body.concat(metadata)))
++      {
++        request->send(503);
++        return;
++      }
++    }
++    response = body.isEmpty() ? request->beginResponse(204) : request->beginResponse(200, "text/plain", body);
++  }
++  response->addHeader("Cache-Control", "no-store");
++  response->addHeader("X-NavPad-Backpack", gpsOnly ? "1" : timed ? "3" : "2");
++  request->send(response);
++}
++#endif
++
+ bool SendTxBackpackTelemetryViaUDP(const uint8_t *data, uint16_t size)
+ {
+   if (!data || size == 0)
+@@ -139,6 +250,10 @@ bool SendTxBackpackTelemetryViaUDP(const uint8_t *data, uint16_t size)
+     return false;
+   }
+ 
++#if defined(NAVPAD_DIRECT_GPS)
++  CaptureNavPadTelemetry(data, size);
++#endif
++
+   IPAddress remote;
+   WiFiMode_t mode = WiFi.getMode();
+   if (mode == WIFI_AP || mode == WIFI_AP_STA)
+@@ -199,6 +314,9 @@ static String toStringIp(IPAddress ip)
+ 
+ static bool captivePortal(AsyncWebServerRequest *request)
+ {
++#if defined(NAVPAD_DIRECT_GPS) && defined(TARGET_TX_BACKPACK)
++  if (wifiService == WIFI_SERVICE_MAVLINK_TX) return false;
++#endif
+   extern const char *myHostname;
+ 
+   if (!isIp(request->host()) && request->host() != (String(myHostname) + ".local"))
+@@ -743,6 +861,11 @@ static void startServices()
+   server.on("/scan.js", WebUpdateSendContent);
+   server.on("/logo.svg", WebUpdateSendContent);
+   server.on("/config", HTTP_GET, GetConfiguration);
++#if defined(NAVPAD_DIRECT_GPS) && defined(TARGET_TX_BACKPACK) && defined(MAVLINK_ENABLED)
++  server.on("/navpad/gps", HTTP_GET, HandleNavPadTelemetry);
++  server.on("/navpad/telemetry", HTTP_GET, HandleNavPadTelemetry);
++  server.on("/navpad/telemetry/v3", HTTP_GET, HandleNavPadTelemetry);
++#endif
+   server.on("/networks.json", WebUpdateSendNetworks);
+   server.on("/sethome", WebUpdateSetHome);
+   #if defined(MAVLINK_ENABLED)
+@@ -752,14 +875,19 @@ static void startServices()
+   server.on("/connect", WebUpdateConnect);
+   server.on("/access", WebUpdateAccessPoint);
+ 
+-  server.on("/generate_204", WebUpdateHandleRoot); // handle Android phones doing shit to detect if there is 'real' internet and possibly dropping conn.
+-  server.on("/gen_204", WebUpdateHandleRoot);
+-  server.on("/library/test/success.html", WebUpdateHandleRoot);
+-  server.on("/hotspot-detect.html", WebUpdateHandleRoot);
+-  server.on("/connectivity-check.html", WebUpdateHandleRoot);
+-  server.on("/check_network_status.txt", WebUpdateHandleRoot);
+-  server.on("/ncsi.txt", WebUpdateHandleRoot);
+-  server.on("/fwlink", WebUpdateHandleRoot);
++#if defined(NAVPAD_DIRECT_GPS) && defined(TARGET_TX_BACKPACK)
++  if (wifiService != WIFI_SERVICE_MAVLINK_TX)
++#endif
++  {
++    server.on("/generate_204", WebUpdateHandleRoot); // handle Android phones doing shit to detect if there is 'real' internet and possibly dropping conn.
++    server.on("/gen_204", WebUpdateHandleRoot);
++    server.on("/library/test/success.html", WebUpdateHandleRoot);
++    server.on("/hotspot-detect.html", WebUpdateHandleRoot);
++    server.on("/connectivity-check.html", WebUpdateHandleRoot);
++    server.on("/check_network_status.txt", WebUpdateHandleRoot);
++    server.on("/ncsi.txt", WebUpdateHandleRoot);
++    server.on("/fwlink", WebUpdateHandleRoot);
++  }
+ 
+   server.on("/update", HTTP_POST, WebUploadResponseHandler, WebUploadDataHandler);
+   server.on("/forceupdate", WebUploadForceUpdateHandler);
+@@ -785,8 +913,13 @@ static void startServices()
+ 
+   server.begin();
+ 
+-  dnsServer.start(DNS_PORT, "*", apIP);
+-  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
++#if defined(NAVPAD_DIRECT_GPS) && defined(TARGET_TX_BACKPACK)
++  if (wifiService != WIFI_SERVICE_MAVLINK_TX)
++#endif
++  {
++    dnsServer.start(DNS_PORT, "*", apIP);
++    dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
++  }
+ 
+   startMDNS();
+ #if defined(MAVLINK_ENABLED)
+diff --git a/targets/txbp_esp.ini b/targets/txbp_esp.ini
+index 4e5b2c3..b08fb9a 100644
+--- a/targets/txbp_esp.ini
++++ b/targets/txbp_esp.ini
+@@ -11,6 +11,7 @@ build_flags =
+ 	${env_common_esp8285.build_flags}
+ 	${tx_backpack_common.build_flags}
+ 	-D MAVLINK_ENABLED=1
++	-D NAVPAD_DIRECT_GPS=1
+ 	-D PIN_BUTTON=0
+ 	-D PIN_LED=16
+ upload_resetmethod = nodemcu

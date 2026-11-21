@@ -1,0 +1,4 @@
+.firmware-build/
+.publication-work/
+__pycache__/
+.DS_Store
